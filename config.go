@@ -12,8 +12,8 @@ import (
 	"strings"
 
 	flags "github.com/btcsuite/go-flags"
-	"github.com/decred/dcrd/chaincfg"
 	"github.com/decred/dcrutil"
+	"github.com/decred/dcrwallet/netparams"
 )
 
 const (
@@ -25,7 +25,7 @@ const (
 )
 
 var curDir, _ = os.Getwd()
-var activeNet = &chaincfg.MainNetParams
+var activeNet = &netparams.MainNetParams
 
 var (
 	dcrdHomeDir              = dcrutil.AppDataDir("dcrd", false)
@@ -36,20 +36,27 @@ var (
 	defaultWalletRPCKeyFile  = filepath.Join(dcrwalletHomeDir, "rpc.key")
 	defaultWalletRPCCertFile = filepath.Join(dcrwalletHomeDir, "rpc.cert")
 	defaultLogDir            = filepath.Join(curDir, defaultLogDirname)
+	defaultHost              = "localhost"
 
-	defaultAccountName       = "default"
-	defaultTicketAddress     = ""
-	defaultPoolAddress       = ""
-	defaultMaxFee            = 1.0
-	defaultMinFee            = 0.01
-	defaultMaxPrice          = 100.0
-	defaultMaxPerBlock       = 3
-	defaultBalanceToMaintain = 0.0
-	defaultHighPricePenalty  = 1.3
-	defaultBlocksToAvg       = 11
-	defaultFeeTargetScaling  = 1.05
-	defaultWaitForTickets    = true
-	defaultExpiryDelta       = 16
+	defaultAccountName        = "default"
+	defaultTicketAddress      = ""
+	defaultPoolAddress        = ""
+	defaultMaxFee             = 1.0
+	defaultMinFee             = 0.01
+	defaultFeeSource          = "mean"
+	defaultTxFee              = 0.01
+	defaultMaxPriceAbsolute   = 100.0
+	defaultMaxPriceScale      = 2.0
+	defaultMinPriceScale      = 0.7
+	defaultPriceTarget        = 0.0
+	defaultMaxPerBlock        = 3
+	defaultBalanceToMaintain  = 0.0
+	defaultHighPricePenalty   = 1.3
+	defaultBlocksToAvg        = 11
+	defaultFeeTargetScaling   = 1.05
+	defaultDontWaitForTickets = false
+	defaultMaxInMempool       = 0
+	defaultExpiryDelta        = 16
 )
 
 type config struct {
@@ -64,29 +71,35 @@ type config struct {
 	// RPC client options
 	DcrdUser         string `long:"dcrduser" description:"Daemon RPC user name"`
 	DcrdPass         string `long:"dcrdpass" description:"Daemon RPC password"`
-	DcrdServ         string `long:"dcrdserv" description:"Hostname/IP and port of dcrd RPC server to connect to (default localhost:9109, testnet: localhost:19109, simnet: localhost:18556)"`
+	DcrdServ         string `long:"dcrdserv" description:"Hostname/IP and port of dcrd RPC server to connect to (default localhost:9109, testnet: localhost:19109, simnet: localhost:19556)"`
 	DcrdCert         string `long:"dcrdcert" description:"File containing the dcrd certificate file"`
 	DcrwUser         string `long:"dcrwuser" description:"Wallet RPC user name"`
 	DcrwPass         string `long:"dcrwpass" description:"Wallet RPC password"`
-	DcrwServ         string `long:"dcrwserv" description:"Hostname/IP and port of dcrwallet RPC server to connect to (default localhost:9110, testnet: localhost:19110, simnet: localhost:18557)"`
+	DcrwServ         string `long:"dcrwserv" description:"Hostname/IP and port of dcrwallet RPC server to connect to (default localhost:9110, testnet: localhost:19110, simnet: localhost:19557)"`
 	DcrwCert         string `long:"dcrwcert" description:"File containing the dcrwallet certificate file"`
 	DisableClientTLS bool   `long:"noclienttls" description:"Disable TLS for the RPC client -- NOTE: This is only allowed if the RPC client is connecting to localhost"`
 
 	// Automatic ticket buyer settings
-	AccountName       string  `long:"accountname" description:"Name of the account to buy tickets from (default: default)"`
-	TicketAddress     string  `long:"ticketaddress" description:"Address to give ticket voting rights to"`
-	PoolAddress       string  `long:"pooladdress" description:"Address to give pool fees rights to"`
-	PoolFees          float64 `long:"poolfees" description:"The pool fee base rate for a given pool"`
-	MaxPrice          float64 `long:"maxprice" description:"Maximum price to pay for a ticket (default: 100)"`
-	MaxFee            float64 `long:"maxfee" description:"Maximum ticket fee per KB (default: 1.0)"`
-	MinFee            float64 `long:"minfee" description:"Minimum ticket fee per KB (default: 0.01)"`
-	MaxPerBlock       int     `long:"maxperblock" description:"Maximum tickets per block (default: 3)"`
-	BalanceToMaintain float64 `long:"balancetomaintain" description:"Balance to try to maintain in the wallet"`
-	HighPricePenalty  float64 `long:"highpricepenality" description:"The exponential penalty to apply to the number of tickets to purchase above the mean ticket pool price (default: 1.3)"`
-	BlocksToAvg       int     `long:"blockstoavg" description:"Number of blocks to average for fees calculation (default: 11)"`
-	FeeTargetScaling  float64 `long:"feetargetscaling" description:"The amount above the mean fee in the previous blocks to purchase tickets with, proportional (default: 1.05)"`
-	WaitForTickets    bool    `long:"waitfortickets" description:"Wait until your last round of tickets have entered the blockchain to attempt to purchase more (default: true)"`
-	ExpiryDelta       int     `long:"expirydelta" description:"Number of blocks in the future before the ticket expires (default: 16)"`
+	AccountName        string  `long:"accountname" description:"Name of the account to buy tickets from (default: default)"`
+	TicketAddress      string  `long:"ticketaddress" description:"Address to give ticket voting rights to"`
+	PoolAddress        string  `long:"pooladdress" description:"Address to give pool fees rights to"`
+	PoolFees           float64 `long:"poolfees" description:"The pool fee base rate for a given pool as a percentage (0.01 to 100.00%)"`
+	MaxPriceAbsolute   float64 `long:"maxpriceabsolute" description:"The absolute maximum price to pay for a ticket (default: 100.0 Coin)"`
+	MaxPriceScale      float64 `long:"maxpricescale" description:"Attempt to prevent the stake difficulty from going above this multiplier (>1.0) by manipulation (default: 2.0, 0.0 to disable)"`
+	MinPriceScale      float64 `long:"minpricescale" description:"Attempt to prevent the stake difficulty from going below this multiplier (<1.0) by manipulation (default: 0.7, 0.0 to disable)"`
+	PriceTarget        float64 `long:"pricetarget" description:"A target to try to seek setting the stake price to rather than meeting the average price (default: 0.0, 0.0 to disable)"`
+	MaxFee             float64 `long:"maxfee" description:"Maximum ticket fee per KB (default: 1.0 Coin/KB)"`
+	MinFee             float64 `long:"minfee" description:"Minimum ticket fee per KB (default: 0.01 Coin/KB)"`
+	FeeSource          string  `long:"feesource" description:"The fee source to use for ticket fee per KB (median or mean, default: mean)"`
+	TxFee              float64 `long:"txfee" description:"Default regular tx fee per KB, for consolidations (default: 0.01 Coin/KB)"`
+	MaxPerBlock        int     `long:"maxperblock" description:"Maximum tickets per block (default: 3)"`
+	BalanceToMaintain  float64 `long:"balancetomaintain" description:"Balance to try to maintain in the wallet"`
+	HighPricePenalty   float64 `long:"highpricepenalty" description:"The exponential penalty to apply to the number of tickets to purchase above the mean ticket pool price (default: 1.3)"`
+	BlocksToAvg        int     `long:"blockstoavg" description:"Number of blocks to average for fees calculation (default: 11)"`
+	FeeTargetScaling   float64 `long:"feetargetscaling" description:"The amount above the mean fee in the previous blocks to purchase tickets with, proportional e.g. 1.05 = 105% (default: 1.05)"`
+	DontWaitForTickets bool    `long:"dontwaitfortickets" description:"Don't wait until your last round of tickets have entered the blockchain to attempt to purchase more"`
+	MaxInMempool       int     `long:"maxinmempool" description:"The maximum number of tickets allowed in mempool before purchasing more tickets (default: 0)"`
+	ExpiryDelta        int     `long:"expirydelta" description:"Number of blocks in the future before the ticket expires (default: 16)"`
 }
 
 // cleanAndExpandPath expands environement variables and leading ~ in the
@@ -197,24 +210,30 @@ func loadConfig() (*config, error) {
 
 	// Default config.
 	cfg := config{
-		DebugLevel:        defaultLogLevel,
-		ConfigFile:        defaultConfigFile,
-		LogDir:            defaultLogDir,
-		DcrdCert:          defaultDaemonRPCCertFile,
-		DcrwCert:          defaultWalletRPCCertFile,
-		AccountName:       defaultAccountName,
-		TicketAddress:     defaultTicketAddress,
-		PoolAddress:       defaultPoolAddress,
-		MaxFee:            defaultMaxFee,
-		MinFee:            defaultMinFee,
-		MaxPrice:          defaultMaxPrice,
-		MaxPerBlock:       defaultMaxPerBlock,
-		BalanceToMaintain: defaultBalanceToMaintain,
-		HighPricePenalty:  defaultHighPricePenalty,
-		BlocksToAvg:       defaultBlocksToAvg,
-		FeeTargetScaling:  defaultFeeTargetScaling,
-		WaitForTickets:    defaultWaitForTickets,
-		ExpiryDelta:       defaultExpiryDelta,
+		DebugLevel:         defaultLogLevel,
+		ConfigFile:         defaultConfigFile,
+		LogDir:             defaultLogDir,
+		DcrdCert:           defaultDaemonRPCCertFile,
+		DcrwCert:           defaultWalletRPCCertFile,
+		AccountName:        defaultAccountName,
+		TicketAddress:      defaultTicketAddress,
+		PoolAddress:        defaultPoolAddress,
+		MaxFee:             defaultMaxFee,
+		MinFee:             defaultMinFee,
+		FeeSource:          defaultFeeSource,
+		TxFee:              defaultTxFee,
+		MaxPriceAbsolute:   defaultMaxPriceAbsolute,
+		MaxPriceScale:      defaultMaxPriceScale,
+		MinPriceScale:      defaultMinPriceScale,
+		PriceTarget:        defaultPriceTarget,
+		MaxPerBlock:        defaultMaxPerBlock,
+		BalanceToMaintain:  defaultBalanceToMaintain,
+		HighPricePenalty:   defaultHighPricePenalty,
+		BlocksToAvg:        defaultBlocksToAvg,
+		FeeTargetScaling:   defaultFeeTargetScaling,
+		DontWaitForTickets: defaultDontWaitForTickets,
+		MaxInMempool:       defaultMaxInMempool,
+		ExpiryDelta:        defaultExpiryDelta,
 	}
 
 	// A config file in the current directory takes precedence.
@@ -233,8 +252,12 @@ func loadConfig() (*config, error) {
 	preParser := flags.NewParser(&preCfg, flags.Default)
 	_, err := preParser.Parse()
 	if err != nil {
-		if e, ok := err.(*flags.Error); !ok || e.Type != flags.ErrHelp {
+		e, ok := err.(*flags.Error)
+		if !ok || e.Type != flags.ErrHelp {
 			preParser.WriteHelp(os.Stderr)
+		}
+		if e.Type == flags.ErrHelp {
+			os.Exit(0)
 		}
 		return loadConfigError(err)
 	}
@@ -269,14 +292,6 @@ func loadConfig() (*config, error) {
 		return loadConfigError(err)
 	}
 
-	// The user must set the dcrd and dcrwallet server variables.
-	if cfg.DcrdServ == "" {
-		return loadConfigError(fmt.Errorf("No dcrd RPC server specified"))
-	}
-	if cfg.DcrwServ == "" {
-		return loadConfigError(fmt.Errorf("No dcrwallet RPC server specified"))
-	}
-
 	// Warn about missing config file after the final command line parse
 	// succeeds.  This prevents the warning on help messages and invalid
 	// options.
@@ -287,13 +302,13 @@ func loadConfig() (*config, error) {
 	// Choose the active network params based on the selected network.
 	// Multiple networks can't be selected simultaneously.
 	numNets := 0
-	activeNet = &chaincfg.MainNetParams
+	activeNet = &netparams.MainNetParams
 	if cfg.TestNet {
-		activeNet = &chaincfg.TestNetParams
+		activeNet = &netparams.TestNetParams
 		numNets++
 	}
 	if cfg.SimNet {
-		activeNet = &chaincfg.SimNetParams
+		activeNet = &netparams.SimNetParams
 		numNets++
 	}
 	if numNets > 1 {
@@ -303,6 +318,25 @@ func loadConfig() (*config, error) {
 		fmt.Fprintln(os.Stderr, err)
 		parser.WriteHelp(os.Stderr)
 		return loadConfigError(err)
+	}
+
+	// If the user has set a pool address, the pool fees for the
+	// pool can not be zero.
+	if cfg.PoolAddress != "" && cfg.PoolFees == 0.0 {
+		str := "%s: Pool address is set but pool fees are unset or 0.00%%"
+		err := fmt.Errorf(str, "loadConfig")
+		fmt.Fprintln(os.Stderr, err)
+		parser.WriteHelp(os.Stderr)
+		return loadConfigError(err)
+	}
+
+	// Set the host names and ports to the default if the
+	// user does not specify them.
+	if cfg.DcrdServ == "" {
+		cfg.DcrdServ = defaultHost + ":" + activeNet.RPCClientPort
+	}
+	if cfg.DcrwServ == "" {
+		cfg.DcrwServ = defaultHost + ":" + activeNet.RPCServerPort
 	}
 
 	// Append the network type to the log directory so it is "namespaced"
