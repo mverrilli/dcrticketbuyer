@@ -24,18 +24,18 @@ const (
 	currentVersion        = 1
 )
 
-var curDir, _ = os.Getwd()
 var activeNet = &netparams.MainNetParams
 
 var (
 	dcrdHomeDir              = dcrutil.AppDataDir("dcrd", false)
 	dcrwalletHomeDir         = dcrutil.AppDataDir("dcrwallet", false)
+	dcrticketbuyerHomeDir    = dcrutil.AppDataDir("dcrticketbuyer", false)
 	defaultDaemonRPCKeyFile  = filepath.Join(dcrdHomeDir, "rpc.key")
 	defaultDaemonRPCCertFile = filepath.Join(dcrdHomeDir, "rpc.cert")
-	defaultConfigFile        = filepath.Join(curDir, defaultConfigFilename)
+	defaultConfigFile        = filepath.Join(dcrticketbuyerHomeDir, defaultConfigFilename)
 	defaultWalletRPCKeyFile  = filepath.Join(dcrwalletHomeDir, "rpc.key")
 	defaultWalletRPCCertFile = filepath.Join(dcrwalletHomeDir, "rpc.cert")
-	defaultLogDir            = filepath.Join(curDir, defaultLogDirname)
+	defaultLogDir            = filepath.Join(dcrticketbuyerHomeDir, defaultLogDirname)
 	defaultHost              = "localhost"
 
 	defaultAccountName        = "default"
@@ -243,7 +243,7 @@ func loadConfig() (*config, error) {
 	}
 
 	if exists {
-		cfg.ConfigFile = defaultConfigFile
+		cfg.ConfigFile = defaultConfigFilename
 	}
 
 	// Pre-parse the command line options to see if an alternative config
